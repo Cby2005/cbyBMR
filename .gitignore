@@ -1,0 +1,19 @@
+# Generated data, trained artifacts, and local caches
+dataset/
+paper/
+logs/
+outputs/
+results/
+checkpoints/
+.ipynb_checkpoints/
+__pycache__/
+*.py[cod]
+*.pth
+*.pt
+*.ckpt
+*.npz
+*.pkl
+*.zip
+npresult*.txt
+data/*record*.txt
+data/*scores*.txt

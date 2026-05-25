@@ -1,0 +1,9 @@
+numpy
+Pillow
+antialiased-cnns
+positional-encodings
+scikit-learn
+timm
+torch
+torchvision
+transformers

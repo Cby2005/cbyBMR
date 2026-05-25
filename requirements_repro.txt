@@ -1,0 +1,16 @@
+albumentations
+googletrans
+numpy
+openpyxl
+opencv-python
+pandas
+positional-encodings
+pytorch-warmup
+scikit-learn
+scipy
+timm
+torch
+torchvision
+transformers
+tqdm
+git+https://github.com/openai/CLIP.git
