@@ -15,11 +15,11 @@ PATIENCE="${PATIENCE:-8}"
 case "$DATASET" in
   duola)
     RUNNER="$PROJECT_ROOT/scripts/run_manifest_duola_paper_strict.sh"
-    BASE_OUTPUT="${BASE_OUTPUT:-/root/autodl-tmp/baseline_results/bmr/duola_paper_mlp_multiseed}"
+    BASE_OUTPUT="${BASE_OUTPUT:-/root/autodl-tmp/baseline_results/bmr/duola_paper_mlp_inceptionv3_multiseed}"
     ;;
   weibo)
     RUNNER="$PROJECT_ROOT/scripts/run_manifest_weibo_paper_strict.sh"
-    BASE_OUTPUT="${BASE_OUTPUT:-/root/autodl-tmp/baseline_results/bmr/weibo_paper_mlp_multiseed}"
+    BASE_OUTPUT="${BASE_OUTPUT:-/root/autodl-tmp/baseline_results/bmr/weibo_paper_mlp_inceptionv3_multiseed}"
     ;;
   *)
     echo "DATASET must be duola or weibo, got: $DATASET" >&2
@@ -34,12 +34,13 @@ completed=0
 failed=0
 for seed in $SEEDS; do
   output_dir="$BASE_OUTPUT/seed_$seed"
-  log_file="$PROJECT_ROOT/logs/bmr_${DATASET}_paper_mlp_seed_${seed}.log"
+  log_file="$PROJECT_ROOT/logs/bmr_${DATASET}_paper_mlp_inceptionv3_seed_${seed}.log"
   mkdir -p "$output_dir"
   echo "Running BMR paper-MLP protocol: dataset=$DATASET seed=$seed epochs=$EPOCHS output=$output_dir"
   if OUTPUT_DIR="$output_dir" LOG_FILE="$log_file" SEED="$seed" EPOCHS="$EPOCHS" \
        BATCH_SIZE="$BATCH_SIZE" NUM_WORKERS="$NUM_WORKERS" PATIENCE="$PATIENCE" \
        MLP_PROTOCOL="paper_elu" \
+       PATTERN_BACKBONE="paper_inception_v3" \
        BATCH_STATS_EVAL="${BATCH_STATS_EVAL:-0}" \
        bash "$RUNNER"; then
     completed=$((completed + 1))
@@ -53,7 +54,7 @@ done
   --root "$BASE_OUTPUT" \
   --seeds $SEEDS \
   --output "$BASE_OUTPUT/multiseed_summary.json" \
-  | tee "$PROJECT_ROOT/logs/bmr_${DATASET}_paper_mlp_multiseed_summary.log"
+  | tee "$PROJECT_ROOT/logs/bmr_${DATASET}_paper_mlp_inceptionv3_multiseed_summary.log"
 
 echo "Completed runs: $completed; failed runs: $failed"
 if [[ "$failed" -gt 0 ]]; then

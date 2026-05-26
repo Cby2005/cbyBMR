@@ -1049,7 +1049,7 @@ def load_data(args, dataset):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-network_arch', type=str, default='UAMFDv2', help='')
+    parser.add_argument('-network_arch', type=str, default='UAMFD', help='')
     parser.add_argument('-training_file', type=str, default='', help='')
     parser.add_argument('-validation_file', type=str, default='', help='')
     parser.add_argument('-testing_file', type=str, default='', help='')

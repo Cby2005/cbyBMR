@@ -6,6 +6,8 @@ cd "$PROJECT_ROOT"
 mkdir -p "${OUTPUT_DIR:-outputs/paper_strict}" logs
 
 export BMR_PAPER_STRICT=1
+export BMR_PAPER_MLP="${BMR_PAPER_MLP:-1}"
+export BMR_PATTERN_BACKBONE="${BMR_PATTERN_BACKBONE:-paper_inception_v3}"
 python scripts/check_paper_assets.py --dataset weibo
 
 CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" python ./UAMFD.py \

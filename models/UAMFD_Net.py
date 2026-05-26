@@ -105,6 +105,9 @@ class UAMFD_Net(nn.Module):
         self.is_use_bce = is_use_bce
         self.paper_strict = os.environ.get('BMR_PAPER_STRICT', '0') == '1'
         self.paper_mlp = self.paper_strict and os.environ.get('BMR_PAPER_MLP', '0') == '1'
+        self.pattern_backbone = os.environ.get(
+            'BMR_PATTERN_BACKBONE', 'paper_inception_v3' if self.paper_strict else 'released_googlenet'
+        )
         out_dim = 1 if self.is_use_bce else 2
         self.num_expert = 3  # 2
         self.depth = 1  # 2
@@ -152,8 +155,14 @@ class UAMFD_Net(nn.Module):
         # )
         # from CNN_architectures.pytorch_resnet import ResNet50
         # self.vgg_net = ResNet50(img_channel=3, num_classes=self.unified_dim, use_SRM=True).cuda()
-        from CNN_architectures.pytorch_inceptionet import GoogLeNet
-        self.vgg_net = GoogLeNet(num_classes=self.unified_dim, use_SRM=True).cuda()
+        if self.pattern_backbone == 'paper_inception_v3':
+            from models.pattern_inception_v3 import PatternInceptionV3
+            self.vgg_net = PatternInceptionV3(num_classes=self.unified_dim).cuda()
+        elif self.pattern_backbone == 'released_googlenet':
+            from CNN_architectures.pytorch_inceptionet import GoogLeNet
+            self.vgg_net = GoogLeNet(num_classes=self.unified_dim, use_SRM=True).cuda()
+        else:
+            raise ValueError("Unknown BMR pattern backbone: {}".format(self.pattern_backbone))
 
         # self.vgg_net = self.vgg_net.cuda()
         self.image_attention = TokenAttention(self.unified_dim, paper_mlp=self.paper_mlp)

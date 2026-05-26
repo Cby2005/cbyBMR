@@ -33,7 +33,8 @@ def main() -> None:
     summary = {
         "protocol": (
             "Independent seed repetitions. Each run selects its checkpoint using validation Macro-F1 only; "
-            "test metrics are aggregated after training. Best test row is descriptive, not a model-selection rule."
+            "the test metric of each validation-selected best checkpoint is averaged after training. "
+            "The single best test row is descriptive, not a model-selection rule."
         ),
         "root": str(args.root),
         "requested_seeds": args.seeds,
@@ -52,6 +53,13 @@ def main() -> None:
                     "min": float(np.min(values)),
                     "max": float(np.max(values)),
                 }
+        summary["averaged_best_performance"] = {
+            metric: {
+                "mean": values["mean"],
+                "std": values["std"],
+            }
+            for metric, values in summary["aggregate"].items()
+        }
         summary["best_descriptive_by_macro_f1"] = max(runs, key=lambda run: run["macro_f1"])
         summary["best_descriptive_by_accuracy"] = max(runs, key=lambda run: run["accuracy"])
 

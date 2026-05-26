@@ -44,6 +44,9 @@ def parse_args():
     parser.add_argument("--coarse_weight", type=float, default=1.0)
     parser.add_argument("--mlp_protocol", choices=["paper_elu", "released_code"], default="paper_elu",
                         help="paper_elu applies the paper-stated one-hidden-layer BatchNorm1d+ELU MLP heads.")
+    parser.add_argument("--pattern_backbone", choices=["paper_inception_v3", "released_googlenet"],
+                        default="paper_inception_v3",
+                        help="paper_inception_v3 selects the paper-stated InceptionNet-V3 pattern analyzer.")
     parser.add_argument("--max_length", type=int, default=197)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--batch_stats_eval", action="store_true",
@@ -128,6 +131,20 @@ def assert_paper_mlp_protocol(model):
         if not valid:
             raise RuntimeError(f"Paper MLP protocol is not satisfied by {name}: {report[name]}")
     return report
+
+
+def assert_pattern_protocol(model, requested_backbone):
+    actual = getattr(model, "pattern_backbone", None)
+    if actual != requested_backbone:
+        raise RuntimeError(f"Requested pattern backbone {requested_backbone}, but model built {actual}.")
+    expected_type = {
+        "paper_inception_v3": "PatternInceptionV3",
+        "released_googlenet": "GoogLeNet",
+    }[requested_backbone]
+    actual_type = type(model.vgg_net).__name__
+    if actual_type != expected_type:
+        raise RuntimeError(f"Pattern backbone {requested_backbone} expected {expected_type}, built {actual_type}.")
+    return {"protocol": requested_backbone, "module_type": actual_type, "verified": True}
 
 
 class ActivationTracer:
@@ -381,6 +398,7 @@ def main():
         raise RuntimeError("The released BMR network constructs CUDA modules; run this baseline with a CUDA GPU.")
     set_seed(args.seed)
     os.environ["BMR_PAPER_MLP"] = "1" if args.mlp_protocol == "paper_elu" else "0"
+    os.environ["BMR_PATTERN_BACKBONE"] = args.pattern_backbone
     if args.dataset_key == "weibo":
         os.environ["BMR_BERT_CHINESE"] = args.text_model
     else:
@@ -413,6 +431,7 @@ def main():
         if args.mlp_protocol == "paper_elu"
         else {"status": "released-code MLP/SimpleGate requested; paper ELU MLP assertion not applied"}
     )
+    pattern_backbone_report = assert_pattern_protocol(model, args.pattern_backbone)
     tracer = None
     if args.diagnose_activations:
         diagnostic_output = args.diagnostic_output or (args.output_dir / "activation_diagnostics.json")
@@ -429,13 +448,22 @@ def main():
     config["protocol"] = {
         "selection": "best validation Macro-F1; test evaluated once after model selection",
         "cc_pairs": "generated online from real-label training examples only; aligned=0, rolled mismatch=1",
-        "invalid_modalities": "image <64x64 or unreadable -> zero image; <5 tokenizer pieces -> No text provided",
+        "invalid_modalities": (
+            "image width or height <64 pixels or unreadable -> zero matrix; "
+            "text <5 whitespace-delimited words -> No text provided; "
+            "for no-whitespace languages use <5 tokenizer units"
+        ),
         "input": "title + body only",
         "pretrained_encoders": "BERT and MAE frozen; verified before optimizer construction",
         "mlp_architecture": (
             "one hidden layer + BatchNorm1d + ELU activation + output projection; verified for active BMR MLP heads"
             if args.mlp_protocol == "paper_elu"
             else "author released-code head architecture selected explicitly; not the paper-text ELU MLP protocol"
+        ),
+        "pattern_branch": (
+            "BayarConv + InceptionNet-V3 (paper protocol)"
+            if args.pattern_backbone == "paper_inception_v3"
+            else "author released-code GoogLeNet(use_SRM=True) comparison path"
         ),
         "evaluation_batchnorm": "batch statistics stability fallback" if args.batch_stats_eval else "released running statistics",
         "activation_diagnostics": (
@@ -445,6 +473,7 @@ def main():
     }
     config["frozen_encoder_report"] = frozen_encoder_report
     config["paper_mlp_report"] = paper_mlp_report
+    config["pattern_backbone_report"] = pattern_backbone_report
     (args.output_dir / "config.json").write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
     best, stale, history, start = -1.0, 0, [], time.time()

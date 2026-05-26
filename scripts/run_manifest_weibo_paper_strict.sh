@@ -21,7 +21,9 @@ fi
 LOG_FILE="${LOG_FILE:-$PROJECT_ROOT/logs/bmr_manifest_weibo_paper_strict.log}"
 
 "$PYTHON" scripts/check_manifest_assets.py --manifest_dir "$MANIFEST_DIR" --image_root "$IMAGE_ROOT"
-BMR_PAPER_STRICT=1 BMR_BERT_CHINESE="$TEXT_MODEL" CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" \
+BMR_PAPER_STRICT=1 BMR_PAPER_MLP="${BMR_PAPER_MLP:-1}" \
+BMR_PATTERN_BACKBONE="${BMR_PATTERN_BACKBONE:-paper_inception_v3}" \
+BMR_BERT_CHINESE="$TEXT_MODEL" CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" \
 "$PYTHON" train_manifest_paper_strict.py \
   --manifest_dir "$MANIFEST_DIR" \
   --image_root "$IMAGE_ROOT" \
@@ -29,6 +31,7 @@ BMR_PAPER_STRICT=1 BMR_BERT_CHINESE="$TEXT_MODEL" CUDA_VISIBLE_DEVICES="${CUDA_V
   --text_model "$TEXT_MODEL" \
   --dataset_key weibo \
   --mlp_protocol "${MLP_PROTOCOL:-paper_elu}" \
+  --pattern_backbone "${PATTERN_BACKBONE:-paper_inception_v3}" \
   --batch_size "${BATCH_SIZE:-24}" \
   --epochs "${EPOCHS:-50}" \
   --learning_rate "${LEARNING_RATE:-0.0001}" \
