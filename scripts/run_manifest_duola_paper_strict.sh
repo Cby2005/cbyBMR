@@ -43,10 +43,13 @@ BMR_PAPER_STRICT=1 BMR_BERT_UNCASED="$TEXT_MODEL" CUDA_VISIBLE_DEVICES="${CUDA_V
   --output_dir "$OUTPUT_DIR" \
   --text_model "$TEXT_MODEL" \
   --dataset_key gossip \
+  --mlp_protocol "${MLP_PROTOCOL:-paper_elu}" \
   --batch_size "${BATCH_SIZE:-24}" \
   --epochs "${EPOCHS:-50}" \
   --learning_rate "${LEARNING_RATE:-0.0001}" \
   --num_workers "${NUM_WORKERS:-8}" \
+  --seed "${SEED:-42}" \
+  --patience "${PATIENCE:-8}" \
   --threshold 0.5 \
   --real_label 0 \
   --fake_label 1 \

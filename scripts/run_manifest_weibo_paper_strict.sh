@@ -14,6 +14,12 @@ export MKL_NUM_THREADS="${THREADS:-8}"
 mkdir -p "$OUTPUT_DIR" "$PROJECT_ROOT/logs"
 cd "$PROJECT_ROOT"
 
+STABILITY_ARGS=()
+if [[ "${BATCH_STATS_EVAL:-0}" == "1" ]]; then
+  STABILITY_ARGS+=(--batch_stats_eval)
+fi
+LOG_FILE="${LOG_FILE:-$PROJECT_ROOT/logs/bmr_manifest_weibo_paper_strict.log}"
+
 "$PYTHON" scripts/check_manifest_assets.py --manifest_dir "$MANIFEST_DIR" --image_root "$IMAGE_ROOT"
 BMR_PAPER_STRICT=1 BMR_BERT_CHINESE="$TEXT_MODEL" CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0}" \
 "$PYTHON" train_manifest_paper_strict.py \
@@ -22,12 +28,16 @@ BMR_PAPER_STRICT=1 BMR_BERT_CHINESE="$TEXT_MODEL" CUDA_VISIBLE_DEVICES="${CUDA_V
   --output_dir "$OUTPUT_DIR" \
   --text_model "$TEXT_MODEL" \
   --dataset_key weibo \
+  --mlp_protocol "${MLP_PROTOCOL:-paper_elu}" \
   --batch_size "${BATCH_SIZE:-24}" \
   --epochs "${EPOCHS:-50}" \
   --learning_rate "${LEARNING_RATE:-0.0001}" \
   --num_workers "${NUM_WORKERS:-8}" \
+  --seed "${SEED:-42}" \
+  --patience "${PATIENCE:-8}" \
   --threshold 0.5 \
   --real_label 0 \
   --fake_label 1 \
   --device cuda:0 \
-  2>&1 | tee "$PROJECT_ROOT/logs/bmr_manifest_weibo_paper_strict.log"
+  "${STABILITY_ARGS[@]}" \
+  2>&1 | tee "$LOG_FILE"

@@ -34,18 +34,48 @@ class SimpleGate(nn.Module):
         return x1 * x2
 
 
+class PaperMLP(nn.Module):
+    """One-hidden-layer MLP required by the BMR paper protocol."""
+
+    def __init__(self, input_dim, hidden_dim, output_dim):
+        super(PaperMLP, self).__init__()
+        self.hidden_dim = hidden_dim
+        self.fc1 = nn.Linear(input_dim, hidden_dim)
+        self.norm = nn.BatchNorm1d(hidden_dim)
+        self.activation = nn.ELU()
+        self.fc2 = nn.Linear(hidden_dim, output_dim)
+
+    def forward(self, x):
+        original_shape = x.shape[:-1]
+        hidden = self.fc1(x).reshape(-1, self.hidden_dim)
+        hidden = self.activation(self.norm(hidden))
+        return self.fc2(hidden).reshape(*original_shape, -1)
+
+
+def paper_hidden_layer(input_dim, hidden_dim):
+    """Hidden portion of a paper MLP when its output head is named separately."""
+    return nn.Sequential(
+        nn.Linear(input_dim, hidden_dim),
+        nn.BatchNorm1d(hidden_dim),
+        nn.ELU(),
+    )
+
+
 class TokenAttention(torch.nn.Module):
     """
     Compute attention layer
     """
 
-    def __init__(self, input_shape):
+    def __init__(self, input_shape, paper_mlp=False):
         super(TokenAttention, self).__init__()
-        self.attention_layer = nn.Sequential(
-            torch.nn.Linear(input_shape, input_shape),
-            SimpleGate(dim=2),
-            torch.nn.Linear(int(input_shape / 2), 1),
-        )
+        if paper_mlp:
+            self.attention_layer = PaperMLP(input_shape, int(input_shape / 2), 1)
+        else:
+            self.attention_layer = nn.Sequential(
+                torch.nn.Linear(input_shape, input_shape),
+                SimpleGate(dim=2),
+                torch.nn.Linear(int(input_shape / 2), 1),
+            )
 
     def forward(self, inputs):
         scores = self.attention_layer(inputs).view(-1, inputs.size(1))
@@ -74,6 +104,7 @@ class UAMFD_Net(nn.Module):
         self.unified_dim, self.text_dim = 768, 768
         self.is_use_bce = is_use_bce
         self.paper_strict = os.environ.get('BMR_PAPER_STRICT', '0') == '1'
+        self.paper_mlp = self.paper_strict and os.environ.get('BMR_PAPER_MLP', '0') == '1'
         out_dim = 1 if self.is_use_bce else 2
         self.num_expert = 3  # 2
         self.depth = 1  # 2
@@ -112,7 +143,7 @@ class UAMFD_Net(nn.Module):
         #     text_model_finetune.append(Block(dim=self.unified_dim, num_heads=8))  # note: need to output model[:,0]
         # self.text_model_finetune = nn.ModuleList(text_model_finetune)
 
-        self.text_attention = TokenAttention(self.unified_dim)
+        self.text_attention = TokenAttention(self.unified_dim, paper_mlp=self.paper_mlp)
 
         # IMAGE: RESNET-50
         # self.vgg_net = torchvision.models.resnet50(pretrained=False)
@@ -125,9 +156,9 @@ class UAMFD_Net(nn.Module):
         self.vgg_net = GoogLeNet(num_classes=self.unified_dim, use_SRM=True).cuda()
 
         # self.vgg_net = self.vgg_net.cuda()
-        self.image_attention = TokenAttention(self.unified_dim)
+        self.image_attention = TokenAttention(self.unified_dim, paper_mlp=self.paper_mlp)
 
-        self.mm_attention = TokenAttention(self.unified_dim)
+        self.mm_attention = TokenAttention(self.unified_dim, paper_mlp=self.paper_mlp)
         # GATE, EXPERTS
         # feature_kernel = {1: 64, 2: 64, 3: 64, 5: 64, 10: 64} # 64*5 note there are 5 kernels and 5 experts!
         image_expert_list, text_expert_list, mm_expert_list = [], [], []
@@ -156,13 +187,16 @@ class UAMFD_Net(nn.Module):
         self.text_experts = nn.ModuleList(text_expert_list)
         self.mm_experts = nn.ModuleList(mm_expert_list)
         # self.out_unified_dim = 320
-        self.image_gate_mae = nn.Sequential(nn.Linear(self.unified_dim, self.unified_dim),
-                                            SimpleGate(),
-                                            nn.BatchNorm1d(int(self.unified_dim / 2)),
-                                            nn.Linear(int(self.unified_dim / 2), self.num_expert),
-                                            # nn.Dropout(0.1),
-                                            # nn.Softmax(dim=1)
-                                            )
+        if self.paper_mlp:
+            self.image_gate_mae = PaperMLP(self.unified_dim, int(self.unified_dim / 2), self.num_expert)
+        else:
+            self.image_gate_mae = nn.Sequential(nn.Linear(self.unified_dim, self.unified_dim),
+                                                SimpleGate(),
+                                                nn.BatchNorm1d(int(self.unified_dim / 2)),
+                                                nn.Linear(int(self.unified_dim / 2), self.num_expert),
+                                                # nn.Dropout(0.1),
+                                                # nn.Softmax(dim=1)
+                                                )
         # self.image_gate_vgg = nn.Sequential(nn.Linear(self.unified_dim, self.unified_dim),
         #                                 nn.LayerNorm(self.unified_dim),
         #                                 SimpleGate(), # nn.SiLU(),
@@ -171,20 +205,24 @@ class UAMFD_Net(nn.Module):
         #                                 nn.Softmax(dim=1)
         #                                 )
 
-        self.text_gate = nn.Sequential(nn.Linear(self.unified_dim, self.unified_dim),
-                                       SimpleGate(),
-                                       nn.BatchNorm1d(int(self.unified_dim / 2)),
-                                       nn.Linear(int(self.unified_dim / 2), self.num_expert),
-                                       # nn.Dropout(0.1),
-                                       # nn.Softmax(dim=1)
-                                       )
-        self.mm_gate = nn.Sequential(nn.Linear(self.unified_dim, self.unified_dim),
-                                     SimpleGate(),
-                                     nn.BatchNorm1d(int(self.unified_dim / 2)),
-                                     nn.Linear(int(self.unified_dim / 2), self.num_expert),
-                                     # nn.Dropout(0.1),
-                                     # nn.Softmax(dim=1)
-                                     )
+        if self.paper_mlp:
+            self.text_gate = PaperMLP(self.unified_dim, int(self.unified_dim / 2), self.num_expert)
+            self.mm_gate = PaperMLP(self.unified_dim, int(self.unified_dim / 2), self.num_expert)
+        else:
+            self.text_gate = nn.Sequential(nn.Linear(self.unified_dim, self.unified_dim),
+                                           SimpleGate(),
+                                           nn.BatchNorm1d(int(self.unified_dim / 2)),
+                                           nn.Linear(int(self.unified_dim / 2), self.num_expert),
+                                           # nn.Dropout(0.1),
+                                           # nn.Softmax(dim=1)
+                                           )
+            self.mm_gate = nn.Sequential(nn.Linear(self.unified_dim, self.unified_dim),
+                                         SimpleGate(),
+                                         nn.BatchNorm1d(int(self.unified_dim / 2)),
+                                         nn.Linear(int(self.unified_dim / 2), self.num_expert),
+                                         # nn.Dropout(0.1),
+                                         # nn.Softmax(dim=1)
+                                         )
 
         # self.image_gate_mae_1 = nn.Sequential(nn.Linear(self.unified_dim, self.unified_dim),
         #                                       SimpleGate(),
@@ -211,7 +249,7 @@ class UAMFD_Net(nn.Module):
         #                                )
 
         ## MAIN TASK GATES
-        self.final_attention = TokenAttention(self.unified_dim)
+        self.final_attention = TokenAttention(self.unified_dim, paper_mlp=self.paper_mlp)
 
         # self.mm_SE_network_main_task = nn.Sequential(nn.Linear(self.unified_dim, 256),
         #                                              SimpleGate(),
@@ -233,12 +271,17 @@ class UAMFD_Net(nn.Module):
         #                                               nn.BatchNorm1d(128),
         #                                               # nn.Dropout(0.2),
         #                                               )
-        self.fusion_SE_network_main_task = nn.Sequential(nn.Linear(self.unified_dim, self.unified_dim),
-                                                         SimpleGate(),
-                                                         nn.BatchNorm1d(int(self.unified_dim / 2)),
-                                                         nn.Linear(int(self.unified_dim / 2), self.num_expert),
-                                                         # nn.Softmax(dim=1)
-                                                         )
+        if self.paper_mlp:
+            self.fusion_SE_network_main_task = PaperMLP(
+                self.unified_dim, int(self.unified_dim / 2), self.num_expert
+            )
+        else:
+            self.fusion_SE_network_main_task = nn.Sequential(nn.Linear(self.unified_dim, self.unified_dim),
+                                                             SimpleGate(),
+                                                             nn.BatchNorm1d(int(self.unified_dim / 2)),
+                                                             nn.Linear(int(self.unified_dim / 2), self.num_expert),
+                                                             # nn.Softmax(dim=1)
+                                                             )
         ## AUXILIARY TASK GATES
         # self.mm_SE_network_aux_task = nn.Sequential(nn.Linear(self.unified_dim, 256),
         #                                              nn.LayerNorm(256),
@@ -285,7 +328,7 @@ class UAMFD_Net(nn.Module):
         #                                    )
 
         # CLASSIFICATION HEAD
-        self.mix_trim = nn.Sequential(
+        self.mix_trim = paper_hidden_layer(self.unified_dim, 64) if self.paper_mlp else nn.Sequential(
             nn.Linear(self.unified_dim, 128),
             SimpleGate(),
             nn.BatchNorm1d(64),
@@ -295,7 +338,7 @@ class UAMFD_Net(nn.Module):
             nn.Linear(64, out_dim),
         )
 
-        self.text_trim = nn.Sequential(
+        self.text_trim = paper_hidden_layer(self.unified_dim, 64) if self.paper_mlp else nn.Sequential(
             nn.Linear(self.unified_dim, 128),
             SimpleGate(),
             nn.BatchNorm1d(64),
@@ -305,7 +348,7 @@ class UAMFD_Net(nn.Module):
             nn.Linear(64, out_dim),
         )
 
-        self.image_trim = nn.Sequential(
+        self.image_trim = paper_hidden_layer(self.unified_dim, 64) if self.paper_mlp else nn.Sequential(
             nn.Linear(self.unified_dim, 128),
             SimpleGate(),
             nn.BatchNorm1d(64),
@@ -315,7 +358,7 @@ class UAMFD_Net(nn.Module):
             nn.Linear(64, out_dim),
         )
 
-        self.vgg_trim = nn.Sequential(
+        self.vgg_trim = paper_hidden_layer(self.unified_dim, 64) if self.paper_mlp else nn.Sequential(
             nn.Linear(self.unified_dim, 128),
             SimpleGate(),
             nn.BatchNorm1d(64),
@@ -325,7 +368,7 @@ class UAMFD_Net(nn.Module):
             nn.Linear(64, out_dim),
         )
 
-        self.aux_trim = nn.Sequential(
+        self.aux_trim = paper_hidden_layer(self.unified_dim, 64) if self.paper_mlp else nn.Sequential(
             nn.Linear(self.unified_dim, 128),
             SimpleGate(),
             nn.BatchNorm1d(64),
@@ -336,42 +379,48 @@ class UAMFD_Net(nn.Module):
         )
 
         #### mapping MLPs
-        self.mapping_IS_MLP = nn.Sequential(
-            nn.Linear(1, 128),
-            SimpleGate(),
-            nn.BatchNorm1d(64),
-            nn.Linear(64, 64),
-            SimpleGate(),
-            nn.BatchNorm1d(32),
-            nn.Linear(32, 1),
-        )
-        self.mapping_T_MLP = nn.Sequential(
-            nn.Linear(1, 128),
-            SimpleGate(),
-            nn.BatchNorm1d(64),
-            nn.Linear(64, 64),
-            SimpleGate(),
-            nn.BatchNorm1d(32),
-            nn.Linear(32, 1),
-        )
-        self.mapping_IP_MLP = nn.Sequential(
-            nn.Linear(1, 128),
-            SimpleGate(),
-            nn.BatchNorm1d(64),
-            nn.Linear(64, 64),
-            SimpleGate(),
-            nn.BatchNorm1d(32),
-            nn.Linear(32, 1),
-        )
-        self.mapping_CC_MLP = nn.Sequential(
-            nn.Linear(1, 128),
-            SimpleGate(),
-            nn.BatchNorm1d(64),
-            nn.Linear(64, 64),
-            SimpleGate(),
-            nn.BatchNorm1d(32),
-            nn.Linear(32, 1),
-        )
+        if self.paper_mlp:
+            self.mapping_IS_MLP = PaperMLP(1, 64, 1)
+            self.mapping_T_MLP = PaperMLP(1, 64, 1)
+            self.mapping_IP_MLP = PaperMLP(1, 64, 1)
+            self.mapping_CC_MLP = PaperMLP(1, 64, 1)
+        else:
+            self.mapping_IS_MLP = nn.Sequential(
+                nn.Linear(1, 128),
+                SimpleGate(),
+                nn.BatchNorm1d(64),
+                nn.Linear(64, 64),
+                SimpleGate(),
+                nn.BatchNorm1d(32),
+                nn.Linear(32, 1),
+            )
+            self.mapping_T_MLP = nn.Sequential(
+                nn.Linear(1, 128),
+                SimpleGate(),
+                nn.BatchNorm1d(64),
+                nn.Linear(64, 64),
+                SimpleGate(),
+                nn.BatchNorm1d(32),
+                nn.Linear(32, 1),
+            )
+            self.mapping_IP_MLP = nn.Sequential(
+                nn.Linear(1, 128),
+                SimpleGate(),
+                nn.BatchNorm1d(64),
+                nn.Linear(64, 64),
+                SimpleGate(),
+                nn.BatchNorm1d(32),
+                nn.Linear(32, 1),
+            )
+            self.mapping_CC_MLP = nn.Sequential(
+                nn.Linear(1, 128),
+                SimpleGate(),
+                nn.BatchNorm1d(64),
+                nn.Linear(64, 64),
+                SimpleGate(),
+                nn.BatchNorm1d(32),
+                nn.Linear(32, 1),
+            )
 
         final_fusing_expert = []
         for i in range(self.num_expert):

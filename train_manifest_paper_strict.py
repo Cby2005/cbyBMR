@@ -42,6 +42,8 @@ def parse_args():
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--cc_weight", type=float, default=4.0)
     parser.add_argument("--coarse_weight", type=float, default=1.0)
+    parser.add_argument("--mlp_protocol", choices=["paper_elu", "released_code"], default="paper_elu",
+                        help="paper_elu applies the paper-stated one-hidden-layer BatchNorm1d+ELU MLP heads.")
     parser.add_argument("--max_length", type=int, default=197)
     parser.add_argument("--num_workers", type=int, default=4)
     parser.add_argument("--batch_stats_eval", action="store_true",
@@ -68,6 +70,64 @@ def set_seed(seed):
     torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+
+
+def assert_frozen_pretrained_encoders(model):
+    """Fail early if a strict run would optimize the frozen paper encoders."""
+    report = {}
+    for name in ["image_model", "text_model"]:
+        module = getattr(model, name)
+        total = sum(parameter.numel() for parameter in module.parameters())
+        trainable = sum(parameter.numel() for parameter in module.parameters() if parameter.requires_grad)
+        report[name] = {"parameters": int(total), "trainable_parameters": int(trainable), "frozen": trainable == 0}
+        if trainable:
+            raise RuntimeError(f"Paper-strict BMR requires frozen {name}; found {trainable} trainable parameters.")
+    return report
+
+
+def assert_paper_mlp_protocol(model):
+    """Confirm active strict MLP heads use one hidden layer, BatchNorm1d, and ELU."""
+    full_modules = {
+        "text_attention": model.text_attention.attention_layer,
+        "image_attention": model.image_attention.attention_layer,
+        "mm_attention": model.mm_attention.attention_layer,
+        "final_attention": model.final_attention.attention_layer,
+        "image_gate": model.image_gate_mae,
+        "text_gate": model.text_gate,
+        "mm_gate": model.mm_gate,
+        "fusion_gate": model.fusion_SE_network_main_task,
+        "mapping_image_semantic": model.mapping_IS_MLP,
+        "mapping_text": model.mapping_T_MLP,
+        "mapping_image_pattern": model.mapping_IP_MLP,
+        "mapping_consistency": model.mapping_CC_MLP,
+    }
+    split_heads = {
+        "final_classifier": (model.mix_trim, model.mix_classifier),
+        "text_classifier": (model.text_trim, model.text_alone_classifier),
+        "image_classifier": (model.image_trim, model.image_alone_classifier),
+        "pattern_classifier": (model.vgg_trim, model.vgg_alone_classifier),
+        "consistency_classifier": (model.aux_trim, model.aux_classifier),
+    }
+    report = {}
+    for name, module in full_modules.items():
+        components = list(module.modules())
+        linears = sum(isinstance(layer, torch.nn.Linear) for layer in components)
+        batchnorms = sum(isinstance(layer, torch.nn.BatchNorm1d) for layer in components)
+        elus = sum(isinstance(layer, torch.nn.ELU) for layer in components)
+        valid = linears == 2 and batchnorms == 1 and elus == 1
+        report[name] = {"linear_layers": linears, "batchnorm1d_layers": batchnorms, "elu_layers": elus, "valid": valid}
+        if not valid:
+            raise RuntimeError(f"Paper MLP protocol is not satisfied by {name}: {report[name]}")
+    for name, modules in split_heads.items():
+        components = [layer for module in modules for layer in module.modules()]
+        linears = sum(isinstance(layer, torch.nn.Linear) for layer in components)
+        batchnorms = sum(isinstance(layer, torch.nn.BatchNorm1d) for layer in components)
+        elus = sum(isinstance(layer, torch.nn.ELU) for layer in components)
+        valid = linears == 2 and batchnorms == 1 and elus == 1
+        report[name] = {"linear_layers": linears, "batchnorm1d_layers": batchnorms, "elu_layers": elus, "valid": valid}
+        if not valid:
+            raise RuntimeError(f"Paper MLP protocol is not satisfied by {name}: {report[name]}")
+    return report
 
 
 class ActivationTracer:
@@ -320,6 +380,7 @@ def main():
     if not torch.cuda.is_available() or not str(args.device).startswith("cuda"):
         raise RuntimeError("The released BMR network constructs CUDA modules; run this baseline with a CUDA GPU.")
     set_seed(args.seed)
+    os.environ["BMR_PAPER_MLP"] = "1" if args.mlp_protocol == "paper_elu" else "0"
     if args.dataset_key == "weibo":
         os.environ["BMR_BERT_CHINESE"] = args.text_model
     else:
@@ -346,6 +407,12 @@ def main():
         dataset=args.dataset_key, text_token_len=args.max_length, image_token_len=197,
         is_use_bce=True, batch_size=args.batch_size, thresh=args.threshold
     ).to(device)
+    frozen_encoder_report = assert_frozen_pretrained_encoders(model)
+    paper_mlp_report = (
+        assert_paper_mlp_protocol(model)
+        if args.mlp_protocol == "paper_elu"
+        else {"status": "released-code MLP/SimpleGate requested; paper ELU MLP assertion not applied"}
+    )
     tracer = None
     if args.diagnose_activations:
         diagnostic_output = args.diagnostic_output or (args.output_dir / "activation_diagnostics.json")
@@ -364,12 +431,20 @@ def main():
         "cc_pairs": "generated online from real-label training examples only; aligned=0, rolled mismatch=1",
         "invalid_modalities": "image <64x64 or unreadable -> zero image; <5 tokenizer pieces -> No text provided",
         "input": "title + body only",
+        "pretrained_encoders": "BERT and MAE frozen; verified before optimizer construction",
+        "mlp_architecture": (
+            "one hidden layer + BatchNorm1d + ELU activation + output projection; verified for active BMR MLP heads"
+            if args.mlp_protocol == "paper_elu"
+            else "author released-code head architecture selected explicitly; not the paper-text ELU MLP protocol"
+        ),
         "evaluation_batchnorm": "batch statistics stability fallback" if args.batch_stats_eval else "released running statistics",
         "activation_diagnostics": (
             "forward-hook trace during standard model.eval(); no evaluation behavior change"
             if args.diagnose_activations else "disabled"
         ),
     }
+    config["frozen_encoder_report"] = frozen_encoder_report
+    config["paper_mlp_report"] = paper_mlp_report
     (args.output_dir / "config.json").write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
 
     best, stale, history, start = -1.0, 0, [], time.time()
